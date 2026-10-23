@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Parte 1: de la imagen a los puntos (x, y)</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#f7f7f5;--fg:#1d1d1b;--card:#fff;--bd:#d6d6d0;--ac:#1a6fd4}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1c1c1a;--fg:#ececea;--card:#2a2a27;--bd:#444;--ac:#6aa8f5}}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,sans-serif;padding:16px}
+h1{font-size:20px;margin:0 0 4px}
+p.s{margin:0 0 12px;opacity:.75}
+.row{display:flex;flex-wrap:wrap;gap:16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:12px;flex:1 1 340px;min-width:0}
+canvas{background:#fff;border:1px solid var(--bd);border-radius:6px;max-width:100%;display:block}
+#img{cursor:crosshair}
+label{display:inline-flex;align-items:center;gap:6px;margin:4px 10px 4px 0}
+input[type=number]{width:64px}
+button{background:var(--ac);color:#fff;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;margin:3px 3px 3px 0}
+button.o{background:var(--card);color:var(--fg);border:1px solid var(--bd)}
+button.on{outline:3px solid #e8a400}
+table{border-collapse:collapse;width:100%;max-width:420px}
+td,th{border-bottom:1px solid var(--bd);padding:3px 8px;text-align:left}
+td button{padding:1px 8px;margin:0}
+.lst{max-height:260px;overflow:auto}
+textarea{width:100%;max-width:420px;height:90px;background:var(--bg);color:var(--fg);border:1px solid var(--bd);border-radius:6px;font-family:monospace}
+#info{font-size:13px;opacity:.85;margin:4px 0}
+</style></head><body>
+<h1>Parte 1: de la imagen a los puntos (x, y)</h1>
+<p class="s">Carga una imagen, haz clic sobre los puntos del contorno y mira cómo aparecen en el plano cartesiano.</p>
+<div class="row">
+<div class="card">
+<b>Imagen</b><br>
+<input type="file" id="file" accept="image/*"><br>
+<button id="bor" class="o">📍 Colocar origen</button>
+<label>Escala <input type="number" id="esc" value="1" min="0.01" step="0.5"> px por unidad</label><br>
+<div id="info"></div>
+<canvas id="img" width="480" height="360"></canvas>
+</div>
+<div class="card">
+<b>Plano cartesiano</b><br>
+<label><input type="checkbox" id="uni" checked> Unir puntos con líneas</label>
+<canvas id="pl" width="400" height="400"></canvas>
+</div>
+</div>
+<div class="card" style="margin-top:16px">
+<b>Lista de puntos (x, y)</b><br>
+<button id="und" class="o">↶ Deshacer</button><button id="clr" class="o">Borrar todo</button>
+<button id="cp">Copiar</button><button id="dl">Descargar .csv</button>
+<div class="row" style="margin-top:8px">
+<div class="lst" style="flex:1 1 260px"><table><thead><tr><th>#</th><th>x</th><th>y</th><th></th></tr></thead><tbody id="tb"></tbody></table></div>
+<div style="flex:1 1 260px"><small>Texto para la Parte 2:</small><br><textarea id="out" readonly></textarea></div>
+</div></div>
+<script>
+const $=i=>document.getElementById(i);
+const ic=$('img'),ix=ic.getContext('2d'),pc=$('pl'),px=pc.getContext('2d');
+let img=null,pts=[],org=[0,360],setOrg=false;
+const sc=()=>Math.max(0.01,+$('esc').value||1);
+const toXY=p=>[(p[0]-org[0])/sc(),(org[1]-p[1])/sc()];
+const f=v=>+v.toFixed(2);
+function drawImg(){
+ ix.fillStyle='#fff';ix.fillRect(0,0,ic.width,ic.height);
+ if(img)ix.drawImage(img,0,0,ic.width,ic.height);
+ ix.lineWidth=1.5;ix.setLineDash([6,4]);
+ ix.strokeStyle='#d02020';ix.beginPath();ix.moveTo(0,org[1]);ix.lineTo(ic.width,org[1]);ix.stroke();
+ ix.strokeStyle='#1a50c8';ix.beginPath();ix.moveTo(org[0],0);ix.lineTo(org[0],ic.height);ix.stroke();
+ ix.setLineDash([]);
+ ix.fillStyle='#111';ix.beginPath();ix.arc(org[0],org[1],5,0,7);ix.fill();
+ ix.font='12px sans-serif';ix.fillText('origen (0,0)',org[0]+8,org[1]-8);
+ pts.forEach((p,i)=>{ix.fillStyle='#e03030';ix.beginPath();ix.arc(p[0],p[1],4,0,7);ix.fill();
+  ix.fillStyle='#000';ix.strokeStyle='#fff';ix.lineWidth=3;ix.strokeText(i+1,p[0]+6,p[1]-6);ix.fillText(i+1,p[0]+6,p[1]-6)});
+}
+function nice(span){const r=span/6,m=Math.pow(10,Math.floor(Math.log10(r))),n=r/m;return (n<1.5?1:n<3.5?2:n<7.5?5:10)*m}
+function drawPl(){
+ const W=pc.width,H=pc.height,q=pts.map(toXY);q.push([0,0]);
+ const xs=q.map(a=>a[0]),ys=q.map(a=>a[1]);
+ const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
+ const span=Math.max(x1-x0,y1-y0,1)*1.25,cx=(x0+x1)/2,cy=(y0+y1)/2,k=W/span;
+ const X=x=>W/2+(x-cx)*k,Y=y=>H/2-(y-cy)*k;
+ px.fillStyle='#fff';px.fillRect(0,0,W,H);
+ const st=nice(span);px.font='11px sans-serif';px.lineWidth=1;
+ for(let v=Math.ceil((cx-span/2)/st)*st;v<=cx+span/2;v+=st){px.strokeStyle='#e4e4e0';px.beginPath();px.moveTo(X(v),0);px.lineTo(X(v),H);px.stroke();
+  px.fillStyle='#666';px.fillText(f(v),X(v)+2,Math.min(H-3,Math.max(11,Y(0)+12)))}
+ for(let v=Math.ceil((cy-span/2)/st)*st;v<=cy+span/2;v+=st){px.strokeStyle='#e4e4e0';px.beginPath();px.moveTo(0,Y(v));px.lineTo(W,Y(v));px.stroke();
+  px.fillStyle='#666';px.fillText(f(v),Math.min(W-30,Math.max(2,X(0)+3)),Y(v)-2)}
+ px.lineWidth=2;px.strokeStyle='#d02020';px.beginPath();px.moveTo(0,Y(0));px.lineTo(W,Y(0));px.stroke();
+ px.strokeStyle='#1a50c8';px.beginPath();px.moveTo(X(0),0);px.lineTo(X(0),H);px.stroke();
+ px.fillStyle='#d02020';px.fillText('x',W-10,Y(0)-5);px.fillStyle='#1a50c8';px.fillText('y',X(0)+5,10);
+ const P=pts.map(toXY);
+ if($('uni').checked&&P.length>1){px.strokeStyle='#e03030';px.lineWidth=1.5;px.beginPath();P.forEach((a,i)=>i?px.lineTo(X(a[0]),Y(a[1])):px.moveTo(X(a[0]),Y(a[1])));px.stroke()}
+ P.forEach((a,i)=>{px.fillStyle='#e03030';px.beginPath();px.arc(X(a[0]),Y(a[1]),4,0,7);px.fill();px.fillStyle='#000';px.font='12px sans-serif';px.fillText(i+1,X(a[0])+6,Y(a[1])-6)});
+}
+function list(){
+ const P=pts.map(toXY);
+ $('tb').innerHTML=P.map((a,i)=>`<tr><td>${i+1}</td><td>${f(a[0])}</td><td>${f(a[1])}</td><td><button class="o" data-i="${i}">✕</button></td></tr>`).join('');
+ $('out').value=P.map(a=>f(a[0])+','+f(a[1])).join('\n');
+ const o=toXY(org);$('info').textContent=setOrg?'Haz clic en la imagen para colocar el origen.':`Puntos: ${pts.length}. Origen en el píxel (${Math.round(org[0])}, ${Math.round(org[1])}).`;
+}
+function all(){drawImg();drawPl();list()}
+ic.onclick=e=>{const b=ic.getBoundingClientRect(),p=[(e.clientX-b.left)*ic.width/b.width,(e.clientY-b.top)*ic.height/b.height];
+ if(setOrg){org=p;setOrg=false;$('bor').classList.remove('on')}else pts.push(p);all()};
+$('bor').onclick=()=>{setOrg=!setOrg;$('bor').classList.toggle('on',setOrg);list()};
+$('tb').onclick=e=>{const i=e.target.dataset.i;if(i!==undefined){pts.splice(+i,1);all()}};
+$('und').onclick=()=>{pts.pop();all()};
+$('clr').onclick=()=>{pts=[];all()};
+$('esc').oninput=all;$('uni').onchange=all;
+$('file').onchange=e=>{const fl=e.target.files[0];if(!fl)return;const im=new Image();
+ im.onload=()=>{const s=Math.min(1,600/Math.max(im.width,im.height));ic.width=Math.round(im.width*s);ic.height=Math.round(im.height*s);img=im;pts=[];org=[0,ic.height];all()};
+ im.src=URL.createObjectURL(fl)};
+$('cp').onclick=()=>{$('out').select();try{navigator.clipboard.writeText($('out').value)}catch(e){document.execCommand('copy')}};
+$('dl').onclick=()=>{const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent('x,y\n'+$('out').value);a.download='puntos.csv';a.click()};
+all();
+</script></body></html>

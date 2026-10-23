@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Parte 3: del cálculo al robot real</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#f7f7f5;--fg:#1d1d1b;--card:#fff;--bd:#d6d6d0;--ac:#1a6fd4}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1c1c1a;--fg:#ececea;--card:#2a2a27;--bd:#444;--ac:#6aa8f5}}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,sans-serif;padding:16px}
+h1{font-size:20px;margin:0 0 4px}
+p.s{margin:0 0 12px;opacity:.75}
+.row{display:flex;flex-wrap:wrap;gap:16px;margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:12px;flex:1 1 340px;min-width:0}
+.sc{overflow-x:auto}
+canvas{background:#fff;border:1px solid var(--bd);border-radius:6px;max-width:100%;display:block}
+label{display:inline-flex;align-items:center;gap:6px;margin:4px 10px 4px 0}
+input[type=number]{width:62px}
+button,select{border-radius:6px;padding:6px 12px;cursor:pointer;margin:3px 3px 3px 0}
+button{background:var(--ac);color:#fff;border:0}
+select{background:var(--card);color:var(--fg);border:1px solid var(--bd)}
+textarea{width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--bd);border-radius:6px;font-family:monospace;box-sizing:border-box}
+fieldset{border:1px solid var(--bd);border-radius:8px;margin:8px 0;padding:4px 10px}
+#info{font-size:13px;margin:6px 0}
+.w{color:#d02020}
+</style></head><body>
+<h1>Parte 3: del cálculo al robot real</h1>
+<p class="s">Pega los ángulos de la Parte 2, ajústalos a tus servos y descarga el código para Arduino o ESP32.</p>
+<div class="row">
+<div class="card">
+<b>1. Ángulos calculados (θ1, θ2)</b>
+<textarea id="inp" rows="5">theta1,theta2
+57.14,63.43
+38.26,89.39
+23.50,108.30
+51.30,81.20
+57.14,63.43</textarea>
+<label>L1 <input type="number" id="L1" value="10" step="0.5"></label>
+<label>L2 <input type="number" id="L2" value="10" step="0.5"></label>
+<fieldset><legend>2. Calibración: servo = ±θ + offset</legend>
+<label>Servo 1 offset <input type="number" id="o1" value="90"></label>
+<label><input type="checkbox" id="i1"> invertir</label>
+<label>mín <input type="number" id="mn1" value="0"></label><label>máx <input type="number" id="mx1" value="180"></label><br>
+<label>Servo 2 offset <input type="number" id="o2" value="90"></label>
+<label><input type="checkbox" id="i2"> invertir</label>
+<label>mín <input type="number" id="mn2" value="0"></label><label>máx <input type="number" id="mx2" value="180"></label><br>
+<button id="auto">Auto-centrar offsets</button>
+</fieldset>
+<div id="info"></div>
+</div>
+<div class="card">
+<b>Lo que haría el robot</b> <small>(gris: ideal · rojo: con los límites del servo)</small>
+<canvas id="cv" width="420" height="340"></canvas>
+<button id="pl">▶ Reproducir</button><label>Vel. <input type="range" id="sp" min="1" max="60" value="15"></label>
+<input type="range" id="sl" min="0" max="0" value="0" style="width:100%">
+</div>
+</div>
+<div class="row">
+<div class="card sc"><b>Valores de cada servo</b> <small>(líneas rojas: límites)</small>
+<canvas id="ch" width="520" height="190"></canvas></div>
+<div class="card">
+<b>3. Código</b><br>
+<label>Placa <select id="bd"><option value="uno">Arduino (Uno/Nano)</option><option value="esp">ESP32</option></select></label>
+<label>Pin 1 <input type="number" id="p1" value="9"></label><label>Pin 2 <input type="number" id="p2" value="10"></label><br>
+<label>Pausa entre puntos <input type="number" id="ps" value="30" min="5"> ms</label>
+<label><input type="checkbox" id="rp" checked> repetir</label>
+<div id="tm" style="font-size:13px"></div>
+<textarea id="out" rows="10" readonly></textarea>
+<button id="cp">Copiar</button><button id="dl">Descargar .ino</button>
+</div>
+</div>
+<script>
+const $=i=>document.getElementById(i),cv=$('cv'),cx=cv.getContext('2d'),ch=$('ch'),cc=ch.getContext('2d'),D=Math.PI/180,TP=2*Math.PI;
+let A=[],raw=[],S=[],ideal=[],real=[],cur=0,timer=null,L1=10,L2=10;
+const f1=v=>(+v.toFixed(1)).toString(),clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const cfg=k=>({off:+$('o'+k).value||0,inv:$('i'+k).checked?-1:1,mn:+$('mn'+k).value,mx:+$('mx'+k).value});
+function parse(){return $('inp').value.split('\n').map(l=>(l.match(/(?<![A-Za-z\d.])-?\d+(?:\.\d+)?/g)||[]).map(Number)).filter(a=>a.length==2)}
+const fk=(a,b)=>({x:L1*Math.cos(a*D)+L2*Math.cos((a+b)*D),y:L1*Math.sin(a*D)+L2*Math.sin((a+b)*D)});
+function build(){
+ stop();L1=+$('L1').value||1;L2=+$('L2').value||1;A=parse();
+ const c1=cfg(1),c2=cfg(2);
+ raw=A.map(a=>[c1.inv*a[0]+c1.off,c2.inv*a[1]+c2.off]);
+ S=raw.map(r=>[clamp(r[0],c1.mn,c1.mx),clamp(r[1],c2.mn,c2.mx)]);
+ ideal=A.map(a=>fk(a[0],a[1]));
+ real=S.map(s=>fk(c1.inv*(s[0]-c1.off),c2.inv*(s[1]-c2.off)));
+ const bad=k=>raw.filter(r=>r[k]<cfg(k+1).mn||r[k]>cfg(k+1).mx).length,rg=k=>raw.length?`${f1(Math.min(...raw.map(r=>r[k])))}° a ${f1(Math.max(...raw.map(r=>r[k])))}°`:'-';
+ $('info').innerHTML=!A.length?'Pega al menos un par de ángulos.':`${A.length} posiciones.<br>Servo 1 usa ${rg(0)}${bad(0)?` <span class="w">⚠ ${bad(0)} fuera de rango</span>`:' ✓'}<br>Servo 2 usa ${rg(1)}${bad(1)?` <span class="w">⚠ ${bad(1)} fuera de rango</span>`:' ✓'}`+((bad(0)||bad(1))?'<br>Prueba Auto-centrar o invertir un servo. Si aun así no cabe, mueve el dibujo en la Parte 1.':'');
+ $('sl').max=Math.max(0,A.length-1);cur=0;$('sl').value=0;code();draw();chart();
+}
+function draw(){
+ cx.fillStyle='#fff';cx.fillRect(0,0,420,340);
+ const R=L1+L2,k=Math.min(190/R,310/R),X=x=>210+x*k,Y=y=>320-y*k;
+ cx.setLineDash([5,4]);cx.strokeStyle='#9bb';cx.lineWidth=1;cx.beginPath();cx.arc(X(0),Y(0),R*k,Math.PI,TP);cx.stroke();cx.setLineDash([]);
+ cx.strokeStyle='#888';cx.beginPath();cx.moveTo(0,Y(0));cx.lineTo(420,Y(0));cx.moveTo(X(0),0);cx.lineTo(X(0),340);cx.stroke();
+ if(!A.length)return;
+ cx.strokeStyle='#aaa';cx.lineWidth=1.5;cx.beginPath();ideal.forEach((p,i)=>i?cx.lineTo(X(p.x),Y(p.y)):cx.moveTo(X(p.x),Y(p.y)));cx.stroke();
+ cx.strokeStyle='#e03030';cx.lineWidth=2;cx.beginPath();for(let i=0;i<=cur;i++)i?cx.lineTo(X(real[i].x),Y(real[i].y)):cx.moveTo(X(real[i].x),Y(real[i].y));cx.stroke();
+ const c1=cfg(1),c2=cfg(2),t1=c1.inv*(S[cur][0]-c1.off)*D,jx=L1*Math.cos(t1),jy=L1*Math.sin(t1),e=real[cur];
+ cx.lineCap='round';cx.lineWidth=7;cx.strokeStyle='#444';cx.beginPath();cx.moveTo(X(0),Y(0));cx.lineTo(X(jx),Y(jy));cx.stroke();
+ cx.strokeStyle='#e8a400';cx.beginPath();cx.moveTo(X(jx),Y(jy));cx.lineTo(X(e.x),Y(e.y));cx.stroke();cx.lineCap='butt';
+ cx.fillStyle='#e03030';cx.beginPath();cx.arc(X(e.x),Y(e.y),5,0,TP);cx.fill();
+ cx.fillStyle='#555';cx.font='12px sans-serif';cx.fillText(`servo 1: ${f1(S[cur][0])}°   servo 2: ${f1(S[cur][1])}°`,8,16);
+}
+function chart(){
+ cc.fillStyle='#fff';cc.fillRect(0,0,520,190);if(!raw.length)return;
+ const all=raw.flat().concat([0,180]),lo=Math.min(...all),hi=Math.max(...all),W=520,H=190,pl=36,Y=v=>H-14-(v-lo)/(hi-lo||1)*(H-28),X=i=>pl+i/Math.max(1,raw.length-1)*(W-pl-8);
+ cc.font='11px sans-serif';cc.lineWidth=1;
+ [[1,'#d02020'],[2,'#d02020']].forEach(([k])=>[cfg(k).mn,cfg(k).mx].forEach(v=>{cc.setLineDash([4,3]);cc.strokeStyle='#e08080';cc.beginPath();cc.moveTo(pl,Y(v));cc.lineTo(W,Y(v));cc.stroke();cc.setLineDash([])}));
+ [[0,'#1a50c8','servo 1'],[1,'#e08a00','servo 2']].forEach(([k,c,n],j)=>{cc.strokeStyle=c;cc.lineWidth=2;cc.beginPath();raw.forEach((r,i)=>i?cc.lineTo(X(i),Y(r[k])):cc.moveTo(X(i),Y(r[k])));cc.stroke();cc.fillStyle=c;cc.fillText(n,pl+6+j*60,12)});
+ cc.fillStyle='#666';[lo,(lo+hi)/2,hi].forEach(v=>cc.fillText(Math.round(v),2,Y(v)+4));
+}
+function code(){
+ const esp=$('bd').value=='esp',n=S.length,ps=+$('ps').value||30;
+ $('tm').textContent=`Duración de un recorrido: ${(n*ps/1000).toFixed(1)} s`;
+ $('out').value=`${esp?'#include <ESP32Servo.h>   // instala la librería ESP32Servo':'#include <Servo.h>'}
+
+Servo servo1, servo2;
+const int PIN_1 = ${$('p1').value};
+const int PIN_2 = ${$('p2').value};
+const int N = ${n};
+const int PAUSA_MS = ${ps};
+
+// Ángulos de servo en décimas de grado (900 = 90.0°)
+const int ANG[N][2] = {
+${S.map(s=>`  {${Math.round(s[0]*10)}, ${Math.round(s[1]*10)}}`).join(',\n')}
+};
+
+void mover(int i) {
+  servo1.writeMicroseconds(map(ANG[i][0], 0, 1800, 500, 2400));
+  servo2.writeMicroseconds(map(ANG[i][1], 0, 1800, 500, 2400));
+}
+
+void setup() {
+  servo1.attach(PIN_1${esp?', 500, 2400':''});
+  servo2.attach(PIN_2${esp?', 500, 2400':''});
+  mover(0);        // ir al primer punto
+  delay(2000);     // tiempo para poner el lápiz
+}
+
+void loop() {
+  for (int i = 0; i < N; i++) {
+    mover(i);
+    delay(PAUSA_MS);
+  }
+  delay(2000);${$('rp').checked?'':'\n  while (true) {}  // dibuja una sola vez'}
+}
+`;
+}
+function stop(){clearInterval(timer);timer=null;$('pl').textContent='▶ Reproducir'}
+function go(i){cur=i;$('sl').value=i;draw()}
+$('pl').onclick=()=>{if(timer)return stop();if(!A.length)return;if(cur>=A.length-1)go(0);$('pl').textContent='⏸ Pausar';
+ timer=setInterval(()=>{if(cur>=A.length-1)return stop();go(cur+1)},1000/(+$('sp').value))};
+$('sp').oninput=()=>{if(timer){$('pl').click();$('pl').click()}};
+$('sl').oninput=e=>{stop();go(+e.target.value)};
+$('auto').onclick=()=>{[1,2].forEach((k,j)=>{const c=cfg(k),v=A.map(a=>a[j]);if(!v.length)return;const m=(Math.min(...v)+Math.max(...v))/2;$('o'+k).value=f1(90-c.inv*m)});build()};
+['inp','L1','L2','o1','o2','i1','i2','mn1','mn2','mx1','mx2'].forEach(i=>$(i).oninput=build);
+['bd','p1','p2','ps','rp'].forEach(i=>$(i).oninput=code);
+$('bd').onchange=()=>{$('p1').value=$('bd').value=='esp'?18:9;$('p2').value=$('bd').value=='esp'?19:10;code()};
+$('cp').onclick=()=>{$('out').select();try{navigator.clipboard.writeText($('out').value)}catch(e){document.execCommand('copy')}};
+$('dl').onclick=()=>{const a=document.createElement('a');a.href='data:text/plain;charset=utf-8,'+encodeURIComponent($('out').value);a.download='robot2r.ino';a.click()};
+build();
+</script></body></html>

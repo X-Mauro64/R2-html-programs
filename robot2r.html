@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Robot 2R: de imagen a ángulos</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#f7f7f5;--fg:#1d1d1b;--card:#fff;--bd:#d6d6d0;--ac:#1a6fd4}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1c1c1a;--fg:#ececea;--card:#2a2a27;--bd:#444;--ac:#6aa8f5}}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,sans-serif;padding:16px}
+h1{font-size:20px;margin:0 0 12px}
+.row{display:flex;flex-wrap:wrap;gap:16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:12px;flex:1 1 320px;min-width:0}
+canvas{background:#fff;border:1px solid var(--bd);border-radius:6px;max-width:100%;touch-action:none}
+label{display:inline-flex;align-items:center;gap:6px;margin:4px 10px 4px 0}
+input[type=number]{width:64px}
+button,select{background:var(--ac);color:#fff;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;margin:3px 3px 3px 0}
+select{background:var(--card);color:var(--fg);border:1px solid var(--bd)}
+textarea{width:100%;height:150px;background:var(--bg);color:var(--fg);border:1px solid var(--bd);border-radius:6px;font-family:monospace}
+#msg{font-size:13px;opacity:.8}
+</style></head><body>
+<h1>Robot 2R: imagen → coordenadas → ángulos</h1>
+<div class="row">
+<div class="card">
+<b>1. Fuente</b><br>
+<select id="mode"><option value="img">Usar imagen</option><option value="draw">Dibujar a mano</option></select>
+<input type="file" id="file" accept="image/*"><br>
+<label>Umbral <input type="range" id="thr" min="20" max="240" value="128"></label>
+<button id="clr">Borrar</button><br>
+<canvas id="src" width="300" height="300"></canvas>
+</div>
+<div class="card">
+<b>2. Robot y dibujo</b><br>
+<label>L1 <input type="number" id="L1" value="10" step="0.5"></label>
+<label>L2 <input type="number" id="L2" value="10" step="0.5"></label>
+<label>Puntos <input type="number" id="N" value="80" min="10" max="500"></label><br>
+<label>Centro X <input type="number" id="cx" value="0" step="0.5"></label>
+<label>Centro Y <input type="number" id="cy" value="12" step="0.5"></label>
+<label>Tamaño <input type="number" id="size" value="8" step="0.5"></label><br>
+<label>Codo <select id="elbow"><option value="1">arriba</option><option value="-1">abajo</option></select></label>
+<button id="sim">▶ Simular</button>
+<div id="msg"></div>
+<canvas id="ws" width="400" height="300"></canvas>
+</div>
+</div>
+<div class="card" style="margin-top:16px">
+<b>3. Lista de ángulos (grados)</b><br>
+<select id="fmt"><option value="csv">CSV: θ1,θ2</option><option value="ino">Arreglo Arduino</option></select>
+<button id="cp">Copiar</button><button id="dl">Descargar</button>
+<textarea id="out" readonly></textarea>
+</div>
+<script>
+const $=i=>document.getElementById(i);
+const sc=$('src'),sx=sc.getContext('2d'),wc=$('ws'),wx=wc.getContext('2d');
+let raw=[],rows=[],img=null,down=false,timer=null;
+const D=Math.PI/180;
+function fit(){sx.fillStyle='#fff';sx.fillRect(0,0,300,300);if(img){const s=Math.min(300/img.width,300/img.height);sx.drawImage(img,0,0,img.width*s,img.height*s)}}
+function trace(){
+ const d=sx.getImageData(0,0,300,300).data,t=+$('thr').value;
+ const on=(x,y)=>x>=0&&y>=0&&x<300&&y<300&&(d[(y*300+x)*4]*.3+d[(y*300+x)*4+1]*.6+d[(y*300+x)*4+2]*.1)<t;
+ let st=null;
+ for(let y=0;y<300&&!st;y++)for(let x=0;x<300;x++)if(on(x,y)){st=[x,y];break}
+ if(!st)return [];
+ const dx=[1,1,0,-1,-1,-1,0,1],dy=[0,1,1,1,0,-1,-1,-1];
+ let c=st.slice(),dir=6,p=[c.slice()];
+ for(let k=0;k<30000;k++){
+  let m=false;
+  for(let i=0;i<8;i++){const q=(dir+i)%8,nx=c[0]+dx[q],ny=c[1]+dy[q];
+   if(on(nx,ny)){c=[nx,ny];dir=(q+6)%8;p.push(c.slice());m=true;break}}
+  if(!m||(c[0]==st[0]&&c[1]==st[1]))break;
+ }
+ return p;
+}
+function resample(p,n){
+ if(p.length<2)return p;
+ const cum=[0];for(let i=1;i<p.length;i++)cum.push(cum[i-1]+Math.hypot(p[i][0]-p[i-1][0],p[i][1]-p[i-1][1]));
+ const T=cum[cum.length-1],r=[];let j=1;
+ for(let i=0;i<n;i++){const s=T*i/(n-1);while(j<p.length-1&&cum[j]<s)j++;
+  const a=(s-cum[j-1])/((cum[j]-cum[j-1])||1);
+  r.push([p[j-1][0]+a*(p[j][0]-p[j-1][0]),p[j-1][1]+a*(p[j][1]-p[j-1][1])]);}
+ return r;
+}
+function update(){
+ clearInterval(timer);
+ if($('mode').value=='img'){fit();raw=trace()}
+ else{sx.fillStyle='#fff';sx.fillRect(0,0,300,300)}
+ const p=resample(raw,+$('N').value);
+ sx.strokeStyle='#e03030';sx.lineWidth=1.5;sx.beginPath();p.forEach((q,i)=>i?sx.lineTo(q[0],q[1]):sx.moveTo(q[0],q[1]));sx.stroke();
+ const L1=+$('L1').value,L2=+$('L2').value,cx=+$('cx').value,cy=+$('cy').value,size=+$('size').value,e=+$('elbow').value;
+ rows=[];let bad=0;
+ if(p.length>1){
+  const xs=p.map(q=>q[0]),ys=p.map(q=>q[1]);
+  const x0=(Math.min(...xs)+Math.max(...xs))/2,y0=(Math.min(...ys)+Math.max(...ys))/2;
+  const s=size/(Math.max(Math.max(...xs)-Math.min(...xs),Math.max(...ys)-Math.min(...ys))||1);
+  p.forEach(q=>{
+   const x=cx+(q[0]-x0)*s,y=cy-(q[1]-y0)*s;
+   let c2=(x*x+y*y-L1*L1-L2*L2)/(2*L1*L2),ok=Math.abs(c2)<=1;if(!ok){bad++;c2=Math.max(-1,Math.min(1,c2))}
+   const t2=e*Math.acos(c2),t1=Math.atan2(y,x)-Math.atan2(L2*Math.sin(t2),L1+L2*Math.cos(t2));
+   rows.push({x,y,t1,t2,ok});
+  });
+ }
+ $('msg').textContent=rows.length?(bad?`⚠ ${bad} puntos fuera del alcance: reduce el tamaño o mueve el centro.`:'Todos los puntos son alcanzables.'):'Sin puntos todavía.';
+ drawWs(rows.length);
+ outText();
+}
+const W={k:0,ox:200,oy:290};
+function drawWs(n,pose){
+ const L1=+$('L1').value,L2=+$('L2').value;W.k=Math.min(190/(L1+L2),280/(L1+L2));
+ const X=x=>W.ox+x*W.k,Y=y=>W.oy-y*W.k;
+ wx.clearRect(0,0,400,300);wx.fillStyle='#fff';wx.fillRect(0,0,400,300);
+ wx.strokeStyle='#bbb';wx.lineWidth=1;
+ [L1+L2,Math.abs(L1-L2)].forEach(r=>{wx.beginPath();wx.arc(X(0),Y(0),r*W.k,Math.PI,2*Math.PI);wx.stroke()});
+ wx.strokeStyle='#9bd';wx.beginPath();rows.forEach((r,i)=>i?wx.lineTo(X(r.x),Y(r.y)):wx.moveTo(X(r.x),Y(r.y)));wx.stroke();
+ if(n>0){
+  wx.strokeStyle='#e03030';wx.lineWidth=2;wx.beginPath();
+  for(let i=0;i<n;i++){const r=rows[i],ex=L1*Math.cos(r.t1)+L2*Math.cos(r.t1+r.t2),ey=L1*Math.sin(r.t1)+L2*Math.sin(r.t1+r.t2);i?wx.lineTo(X(ex),Y(ey)):wx.moveTo(X(ex),Y(ey))}
+  wx.stroke();
+  const r=rows[n-1],jx=L1*Math.cos(r.t1),jy=L1*Math.sin(r.t1),ex=jx+L2*Math.cos(r.t1+r.t2),ey=jy+L2*Math.sin(r.t1+r.t2);
+  wx.strokeStyle='#333';wx.lineWidth=4;wx.beginPath();wx.moveTo(X(0),Y(0));wx.lineTo(X(jx),Y(jy));wx.lineTo(X(ex),Y(ey));wx.stroke();
+ }
+}
+function outText(){
+ const f=r=>(r.t1/D).toFixed(2)+','+(r.t2/D).toFixed(2);
+ $('out').value=$('fmt').value=='csv'?'theta1,theta2\n'+rows.map(f).join('\n'):'const int N = '+rows.length+';\nfloat angulos[N][2] = {\n'+rows.map(r=>'  {'+f(r)+'}').join(',\n')+'\n};';
+}
+$('sim').onclick=()=>{clearInterval(timer);let i=1;timer=setInterval(()=>{drawWs(i);if(++i>rows.length)clearInterval(timer)},40)};
+$('file').onchange=e=>{const f=e.target.files[0];if(!f)return;const im=new Image();im.onload=()=>{img=im;$('mode').value='img';update()};im.src=URL.createObjectURL(f)};
+$('clr').onclick=()=>{raw=[];img=null;$('file').value='';update()};
+['mode','thr','L1','L2','N','cx','cy','size','elbow'].forEach(i=>$(i).oninput=()=>{if(i=='mode')raw=[];update()});
+$('fmt').onchange=outText;
+const pos=e=>{const b=sc.getBoundingClientRect();return[(e.clientX-b.left)*300/b.width,(e.clientY-b.top)*300/b.height]};
+sc.onpointerdown=e=>{if($('mode').value!='draw')return;down=true;raw=[pos(e)]};
+sc.onpointermove=e=>{if(!down)return;raw.push(pos(e));update()};
+window.onpointerup=()=>{down=false};
+$('cp').onclick=()=>{$('out').select();try{navigator.clipboard.writeText($('out').value)}catch(e){document.execCommand('copy')}};
+$('dl').onclick=()=>{const a=document.createElement('a');a.href='data:text/plain;charset=utf-8,'+encodeURIComponent($('out').value);a.download='angulos_2r.txt';a.click()};
+update();
+</script></body></html>
